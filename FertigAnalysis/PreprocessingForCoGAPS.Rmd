@@ -1,0 +1,95 @@
+---
+title: "ADCC Analysis"
+author: "Elana J Fertig"
+date: "July 13, 2015"
+output: word_document
+---
+
+R packages
+---
+```{r}
+library('simpleaffy')
+library('lumi')
+library('gplots')
+```
+
+
+Data Preprocessing
+----
+
+Processing raw data, adapted from `2013-01-03 Illumina lumi Analysis.R`.
+
+Read in the raw data using the `lumi` Bioconductor package.
+```{r}
+sample.probe.file <- "../Data/sample_probe_profile.txt"
+qc.probe.file <- "../Data/control_probe_profile.no_hyb.txt"
+
+lumi.data <- lumiR.batch(sample.probe.file, annotationColumn=c("ENTREZ_GENE_ID", "SYMBOL", "CHROMOSOME", "DEFINITION"))
+lumi.data <- addControlData2lumi(qc.probe.file, lumi.data)
+sampleNames(lumi.data) <- c(paste(30:35, "S", sep="-"), paste(30:35, "R", sep="-"))
+```
+
+Quantile normalization of the data.
+```{r}
+lumi.data.analyzed <- lumiExpresso(
+  lumi.data,
+	varianceStabilize.param=list(method="log2"), 
+	normalize.param=list(method="quantile")
+)
+```
+
+Subset to annotated genes that were detected and annotated to a gene.
+```{r}
+lumi.data.analyzed.gsea <- lumi.data.analyzed[ fData(lumi.data.analyzed)$SYMBOL != "", ]
+
+lumi.data.analyzed.gsea.selected <- lumi.data.analyzed.gsea[ detectionCall(lumi.data.analyzed.gsea) > 0, ]
+```
+
+
+Double checking normalization
+```{r}
+boxplot(lumi.data.analyzed.gsea.selected,las=2)
+```
+
+Retain only those probes which have an overall fold change between any condition of at least 1.
+```{r}
+normLumiDat.logFC <- lumi.data.analyzed.gsea.selected[apply(exprs(lumi.data.analyzed.gsea.selected),1,function(x){max(x)-min(x)}) > 1,]
+```
+
+Dominant clustering appears to be by whether lines are sensitive or resistant. Subclusters appear to distinguish timing, although recognize it may be confounded with technicalities relating to batch.
+```{r}
+plot(standard.pearson(exprs(normLumiDat.logFC)))
+```
+
+PCA analysis
+```{r}
+pca <- prcomp(t(exprs(normLumiDat.logFC)),
+              center=TRUE, scale=TRUE)$x
+plot(pca[,1], pca[,2],col=ifelse(substr(row.names(pca),4,4)=='S','black','red'),
+     pch=substr(row.names(pca),2,2))
+```
+
+Get gene level data for analysis with CoGAPS.
+```{r}
+normLumiDat.Gene <- apply(exprs(normLumiDat.logFC),2,function(x){
+  tapply(x,fData(normLumiDat.logFC)$SYMBOL,mean)
+})
+normLumiDat.Gene.SD <- apply(exprs(normLumiDat.logFC),2,function(x){
+  tapply(x,fData(normLumiDat.logFC)$SYMBOL,sd)
+})
+```
+
+Heatmap of mean gene expression data
+```{r}
+heatmap.2(normLumiDat.Gene,scale='row',trace='none',
+          col=greenred,hclust=function(x) hclust(x,method="complete"),
+          distfun=function(x) as.dist((1-cor(t(x)))/2))
+```
+
+Export the data for CoGAPS analysis.
+```{r}
+save(list=ls(pattern='Gene'),
+     file='NormGeneData.Rda')
+```
+
+
